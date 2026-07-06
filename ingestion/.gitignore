@@ -1,4 +1,15 @@
-node_modules
-idl
+# Build artifacts
+**/target/
+**/node_modules/
+**/.next/
+**/.anchor/
+**/test-ledger/
+
+# Keypairs — never commit private keys
 wallet.json
+*.json.key
+id.json
+
+# Env files
 .env
+.env.local
