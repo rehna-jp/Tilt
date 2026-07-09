@@ -34,6 +34,7 @@ import * as http from "http";
 import * as nacl from "tweetnacl";
 import type { Txoracle } from "./types/txoracle";
 import { RoundEngine, OddsTick } from "./game/roundEngine";
+import { updatePlayerScore } from "./leaderboardClient";
 
 // ---- Config (mirrors activate_and_stream.ts, verified 2026-07) ----
 const NETWORK: "mainnet" | "devnet" = "devnet";
@@ -78,6 +79,69 @@ const HTTP_PORT = Number(process.env.PORT || "8787");
 type SseClient = { res: http.ServerResponse; id: number };
 let sseClients: SseClient[] = [];
 let nextClientId = 1;
+
+// ---- Per-player running stats (in-memory; resets if the server restarts) ----
+// This is what makes on-chain writes meaningful: the program only stores
+// best_streak and cumulative totals, it doesn't compute "current streak"
+// itself — that's tracked here and pushed on-chain after each round.
+const POINTS_PER_WIN = 10;
+
+interface PlayerStats {
+  currentStreak: number;
+  totalPoints: number;
+}
+
+const playerStats = new Map<string, PlayerStats>();
+
+function getOrInitStats(userId: string): PlayerStats {
+  let stats = playerStats.get(userId);
+  if (!stats) {
+    stats = { currentStreak: 0, totalPoints: 0 };
+    playerStats.set(userId, stats);
+  }
+  return stats;
+}
+
+/**
+ * Updates in-memory stats for one player based on a round result, then
+ * fires an on-chain update_score call. Runs async and does not block round
+ * resolution/broadcast — on-chain writes are slower than the live game loop
+ * and a failure here shouldn't take down the round engine or the SSE feed.
+ *
+ * Skips the on-chain write entirely if this round didn't actually change
+ * anything for the player (e.g. losing again while already at a 0 streak)
+ * — repeated no-op writes would just burn transactions and rent for no
+ * benefit, and add load risk during a live demo with many players.
+ */
+function settlePlayerOnChain(userId: string, won: boolean) {
+  const stats = getOrInitStats(userId);
+
+  const streakBefore = stats.currentStreak;
+
+  if (won) {
+    stats.currentStreak += 1;
+    stats.totalPoints += POINTS_PER_WIN;
+  } else {
+    stats.currentStreak = 0;
+  }
+
+  const nothingChanged = !won && streakBefore === 0;
+  if (nothingChanged) {
+    console.log(`[Tilt Server] skipping on-chain write for ${userId} (already at 0 streak, no-op loss)`);
+    return;
+  }
+
+  updatePlayerScore(userId, stats.currentStreak, won ? POINTS_PER_WIN : 0, won)
+    .then((sig) => {
+      console.log(`[Tilt Server] on-chain score updated for ${userId}: ${sig}`);
+    })
+    .catch((err) => {
+      // Deliberately non-fatal: a failed on-chain write (e.g. RPC hiccup,
+      // insufficient SOL for rent on a brand new player) shouldn't crash
+      // the live game loop. Worth monitoring these logs in practice though.
+      console.error(`[Tilt Server] on-chain score update FAILED for ${userId}:`, err.message || err);
+    });
+}
 
 function broadcast(event: string, data: unknown) {
   const payload = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
@@ -202,6 +266,17 @@ async function main() {
   engine.onRoundResolve((result) => {
     console.log(`[round ${result.roundId}] resolved: ${result.direction} (${result.startLine} -> ${result.endLine})`);
     broadcast("round_resolve", result);
+
+    // Only settle players who actually called this round — a "flat" round
+    // (direction didn't move enough to count) still has winners/losers
+    // arrays from the engine, but flat rounds route everyone to losers by
+    // design (see roundEngine.ts), which is intentional: no clear winner.
+    for (const userId of result.winners) {
+      settlePlayerOnChain(userId, true);
+    }
+    for (const userId of result.losers) {
+      settlePlayerOnChain(userId, false);
+    }
   });
 
   engine.onTick(({ line, ts }) => {

@@ -1,0 +1,149 @@
+{
+  "address": "75RwuxJxo78e2mXswbhYW197ykfZjHV7mJQnJZCkDBbk",
+  "metadata": {
+    "name": "tilt_leaderboard",
+    "version": "0.1.0",
+    "spec": "0.1.0"
+  },
+  "instructions": [
+    {
+      "name": "update_score",
+      "docs": [
+        "Called by the backend after a round resolves, once per player who",
+        "made a call in that round. Not called per-round for a whole match —",
+        "only for players who actually participated, to avoid writing",
+        "unnecessary on-chain data for empty rounds."
+      ],
+      "discriminator": [
+        188,
+        226,
+        238,
+        41,
+        14,
+        241,
+        105,
+        215
+      ],
+      "accounts": [
+        {
+          "name": "authority",
+          "writable": true,
+          "signer": true,
+          "address": "3HA4rikM96RMZ5g5dBFeALzWuPnzdzvGDNqLDtfYvkia"
+        },
+        {
+          "name": "player",
+          "docs": [
+            "to sign — the backend authority is the trusted source of round",
+            "outcomes, since it's the process that actually resolved the round",
+            "against live TxLINE data."
+          ]
+        },
+        {
+          "name": "player_score",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  108,
+                  97,
+                  121,
+                  101,
+                  114,
+                  95,
+                  115,
+                  99,
+                  111,
+                  114,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "player"
+              }
+            ]
+          }
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "new_streak",
+          "type": "u16"
+        },
+        {
+          "name": "points_delta",
+          "type": "u32"
+        },
+        {
+          "name": "won",
+          "type": "bool"
+        }
+      ]
+    }
+  ],
+  "accounts": [
+    {
+      "name": "PlayerScore",
+      "discriminator": [
+        9,
+        136,
+        69,
+        222,
+        93,
+        178,
+        186,
+        241
+      ]
+    }
+  ],
+  "errors": [
+    {
+      "code": 6000,
+      "name": "Unauthorized",
+      "msg": "Only the trusted backend authority can update scores"
+    },
+    {
+      "code": 6001,
+      "name": "Overflow",
+      "msg": "Arithmetic overflow while updating score"
+    }
+  ],
+  "types": [
+    {
+      "name": "PlayerScore",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "owner",
+            "type": "pubkey"
+          },
+          {
+            "name": "best_streak",
+            "type": "u16"
+          },
+          {
+            "name": "total_points",
+            "type": "u32"
+          },
+          {
+            "name": "matches_played",
+            "type": "u32"
+          },
+          {
+            "name": "rounds_won",
+            "type": "u32"
+          }
+        ]
+      }
+    }
+  ]
+}
