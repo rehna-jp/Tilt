@@ -1,0 +1,28 @@
+# ── Build & compile output ────────────────────────────────────────────────────
+**/target/
+**/.next/
+**/dist/
+**/build/
+
+# ── Dependencies ──────────────────────────────────────────────────────────────
+**/node_modules/
+
+# ── Anchor / Solana ───────────────────────────────────────────────────────────
+**/.anchor/
+**/test-ledger/
+
+# ── Keypairs — never commit private keys ──────────────────────────────────────
+wallet.json
+*.json.key
+id.json
+
+# ── Environment files ─────────────────────────────────────────────────────────
+*.env
+*.env.local
+.env.*
+
+# ── Editor / OS cruft ────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
