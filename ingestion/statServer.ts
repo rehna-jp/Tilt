@@ -5,17 +5,17 @@
  * instead of the odds stream and RoundEngine. This is the pivot toward the
  * "predict the next stat" mechanic instead of "predict the odds line."
  *
- * ⚠️ DEPENDS ON scoreTickDecoder.ts, WHICH IS UNVERIFIED ⚠️
- * See scoreTickDecoder.ts for details — until a real captured tick confirms
- * the field names, this server may silently receive zero usable snapshots
- * even while connected and streaming. Watch the console: it logs every raw
- * tick it receives so you can tell if decodeScoreTick() is actually
- * producing snapshots or returning null on everything.
+ * scoreTickDecoder.ts is verified against real live match data (Norway vs
+ * England, 2026-07-11) — see that file for details.
+ *
+ * On startup, this also fetches the fixture's real team names via
+ * /api/fixtures/snapshot and broadcasts them as a "match_info" SSE event,
+ * so the frontend can show "Norway vs England" instead of a bare fixture ID.
  *
  * Run with:
  *   ANCHOR_PROVIDER_URL="https://api.devnet.solana.com" \
  *   ANCHOR_WALLET="./wallet.json" \
- *   FIXTURE_ID=18209181 \
+ *   FIXTURE_ID=18213979 \
  *   npx ts-node statServer.ts
  */
 
@@ -68,7 +68,7 @@ const DURATION_WEEKS = 4;
 const SELECTED_LEAGUES: number[] = [];
 
 // ---- Game config ----
-const FIXTURE_ID = Number(process.env.FIXTURE_ID || "18209181");
+const FIXTURE_ID = Number(process.env.FIXTURE_ID || "18213979"); // Norway vs England (confirmed real)
 const ROUND_DURATION_MS = Number(process.env.ROUND_DURATION_MS || "90000");
 const HTTP_PORT = Number(process.env.PORT || "8788"); // different port from server.ts, so both can run side by side
 
@@ -191,11 +191,49 @@ async function activateAndGetScoresStream() {
     throw new Error(`Stream connection failed: ${streamResponse.status}`);
   }
 
-  return streamResponse.body.getReader();
+  return { reader: streamResponse.body.getReader(), jwt, apiToken };
+}
+
+interface MatchInfo {
+  homeTeam: string;
+  awayTeam: string;
+  startTime: number;
+  competition?: string;
+}
+
+/**
+ * Looks up real team names for FIXTURE_ID via /api/fixtures/snapshot —
+ * same endpoint verified in lookup_fixtures.ts. Returns null (not thrown)
+ * on failure so a lookup hiccup doesn't take down the whole server; the
+ * frontend just falls back to showing the bare fixture ID in that case.
+ */
+async function lookupMatchInfo(jwt: string, apiToken: string): Promise<MatchInfo | null> {
+  try {
+    const response = await axios.get(`${apiBaseUrl}/fixtures/snapshot`, {
+      headers: { Authorization: `Bearer ${jwt}`, "X-Api-Token": apiToken },
+    });
+    const fixtures: any[] = response.data;
+    const match = fixtures.find((f) => f.FixtureId === FIXTURE_ID);
+    if (!match) {
+      console.warn(`[Stat Server] Fixture ${FIXTURE_ID} not found in snapshot — match name unavailable.`);
+      return null;
+    }
+    return {
+      homeTeam: match.Participant1IsHome ? match.Participant1 : match.Participant2,
+      awayTeam: match.Participant1IsHome ? match.Participant2 : match.Participant1,
+      startTime: match.StartTime,
+      competition: match.Competition,
+    };
+  } catch (err: any) {
+    console.warn("[Stat Server] Fixture lookup failed (non-fatal):", err.message || err);
+    return null;
+  }
 }
 
 // ---- Main ----
 async function main() {
+  let matchInfo: MatchInfo | null = null;
+
   const engine = new StatRoundEngine({
     fixtureId: FIXTURE_ID,
     roundDurationMs: ROUND_DURATION_MS,
@@ -245,7 +283,13 @@ async function main() {
       const openRound = engine.getOpenRound();
       const currentTotals = engine.getCurrentTotals();
       if (openRound && currentTotals) {
-        res.write(`event: state\ndata: ${JSON.stringify({ openRound, currentTotals })}\n\n`);
+        res.write(`event: state\ndata: ${JSON.stringify({ openRound, currentTotals, matchInfo })}\n\n`);
+      }
+      // Send match info separately too, in case a round hasn't opened yet
+      // (currentTotals may be null early on, but match info is available
+      // as soon as the fixtures lookup completes at startup).
+      if (matchInfo) {
+        res.write(`event: match_info\ndata: ${JSON.stringify(matchInfo)}\n\n`);
       }
 
       req.on("close", () => {
@@ -309,7 +353,16 @@ async function main() {
   });
 
   // --- Connect to scores stream and pump ticks through the decoder ---
-  const reader = await activateAndGetScoresStream();
+  const { reader, jwt, apiToken } = await activateAndGetScoresStream();
+
+  matchInfo = await lookupMatchInfo(jwt, apiToken);
+  if (matchInfo) {
+    console.log(`[Stat Server] Match: ${matchInfo.homeTeam} vs ${matchInfo.awayTeam}`);
+    broadcast("match_info", matchInfo);
+  } else {
+    console.log(`[Stat Server] Match name unavailable — frontend will show fixture ID ${FIXTURE_ID} instead.`);
+  }
+
   const decoder = new TextDecoder();
   let rawTickCount = 0;
   let decodedCount = 0;

@@ -50,6 +50,13 @@ export interface RoundResolvePayload {
   playerOutcomes: PlayerRoundOutcome[];
 }
 
+export interface MatchInfo {
+  homeTeam: string;
+  awayTeam: string;
+  startTime: number;
+  competition?: string;
+}
+
 export type ConnectionStatus = "connecting" | "open" | "closed";
 
 const STAT_SERVER_URL = process.env.NEXT_PUBLIC_STAT_SERVER_URL || "http://localhost:8788";
@@ -60,6 +67,7 @@ export function useStatGameSocket(userId: string | null) {
   const [openRound, setOpenRound] = useState<OpenRound | null>(null);
   const [lastResolved, setLastResolved] = useState<RoundResolvePayload | null>(null);
   const [history, setHistory] = useState<RoundResolvePayload[]>([]);
+  const [matchInfo, setMatchInfo] = useState<MatchInfo | null>(null);
   const sourceRef = useRef<EventSource | null>(null);
 
   useEffect(() => {
@@ -74,6 +82,16 @@ export function useStatGameSocket(userId: string | null) {
         const data = JSON.parse((e as MessageEvent).data);
         if (data.currentTotals) setCurrentTotals(data.currentTotals);
         if (data.openRound) setOpenRound(data.openRound);
+        if (data.matchInfo) setMatchInfo(data.matchInfo);
+      } catch {
+        // ignore malformed payload
+      }
+    });
+
+    source.addEventListener("match_info", (e) => {
+      try {
+        const data = JSON.parse((e as MessageEvent).data) as MatchInfo;
+        setMatchInfo(data);
       } catch {
         // ignore malformed payload
       }
@@ -130,5 +148,5 @@ export function useStatGameSocket(userId: string | null) {
   const myLastOutcome =
     lastResolved && userId ? lastResolved.playerOutcomes.find((o) => o.userId === userId) ?? null : null;
 
-  return { status, currentTotals, openRound, lastResolved, myLastOutcome, history, submitCall };
+  return { status, currentTotals, openRound, lastResolved, myLastOutcome, history, matchInfo, submitCall };
 }

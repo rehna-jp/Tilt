@@ -31,7 +31,7 @@ export default function Home() {
   const { publicKey, connected } = useWallet();
   const userId = publicKey?.toBase58() ?? null;
 
-  const { status, currentTotals, openRound, lastResolved, myLastOutcome, history, submitCall } =
+  const { status, currentTotals, openRound, lastResolved, myLastOutcome, history, matchInfo, submitCall } =
     useStatGameSocket(userId);
 
   const [selectedCategory, setSelectedCategory] = useState<StatCategory>("corners");
@@ -83,6 +83,15 @@ export default function Home() {
         <div className="brand">TILT</div>
         <WalletMultiButton />
       </header>
+
+      {matchInfo && (
+        <div className="match-banner">
+          <span className="match-teams">
+            {matchInfo.homeTeam} <span className="match-vs">vs</span> {matchInfo.awayTeam}
+          </span>
+          {matchInfo.competition && <span className="match-competition">{matchInfo.competition}</span>}
+        </div>
+      )}
 
       <section className="stage">
         <div className="status-row">
@@ -215,6 +224,31 @@ export default function Home() {
           font-size: 28px;
           letter-spacing: 0.04em;
           color: var(--line);
+        }
+        .match-banner {
+          display: flex;
+          align-items: baseline;
+          justify-content: space-between;
+          padding: 4px 2px;
+          margin-top: -12px;
+        }
+        .match-teams {
+          font-family: var(--font-display);
+          font-weight: 700;
+          font-size: 16px;
+          color: var(--text);
+        }
+        .match-vs {
+          color: var(--text-dim);
+          font-weight: 500;
+          margin: 0 4px;
+        }
+        .match-competition {
+          font-family: var(--font-mono);
+          font-size: 11px;
+          color: var(--text-dim);
+          text-transform: uppercase;
+          letter-spacing: 0.05em;
         }
         .stage {
           background: var(--bg-elevated);
