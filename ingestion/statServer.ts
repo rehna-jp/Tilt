@@ -35,7 +35,7 @@ import type { Txoracle } from "./types/txoracle";
 import { StatRoundEngine, RoundResolvePayload, HiLoCall } from "./game/statRoundEngine";
 import { StatCategory } from "./game/statTypes";
 import { decodeScoreTick, RawScoreTick } from "./scoreTickDecoder";
-import { updatePlayerScore } from "./leaderboardClient";
+import { updatePlayerScore, fetchLeaderboard } from "./leaderboardClient";
 
 // ---- Config (same verified network setup as server.ts) ----
 const NETWORK: "mainnet" | "devnet" = "devnet";
@@ -177,6 +177,18 @@ async function activateAndGetScoresStream() {
   const apiToken = activationResponse.data.token || activationResponse.data;
   console.log("[Stat Server] API token activated.");
 
+  const reader = await openScoresStream(jwt, apiToken);
+  return { reader, jwt, apiToken };
+}
+
+/**
+ * Opens just the SSE connection to the scores stream, reusing an existing
+ * jwt/apiToken pair. Cheap — no on-chain transaction, no re-activation.
+ * Used both for the initial connect (via activateAndGetScoresStream) and
+ * for reconnects after a stream drop, as long as the existing credentials
+ * still work.
+ */
+async function openScoresStream(jwt: string, apiToken: string): Promise<ReadableStreamDefaultReader<Uint8Array>> {
   const streamUrl = `${apiBaseUrl}/scores/stream`; // SCORES, not odds
   const streamResponse = await fetch(streamUrl, {
     headers: {
@@ -191,7 +203,7 @@ async function activateAndGetScoresStream() {
     throw new Error(`Stream connection failed: ${streamResponse.status}`);
   }
 
-  return { reader: streamResponse.body.getReader(), jwt, apiToken };
+  return streamResponse.body.getReader();
 }
 
 interface MatchInfo {
@@ -238,6 +250,14 @@ async function main() {
     fixtureId: FIXTURE_ID,
     roundDurationMs: ROUND_DURATION_MS,
     basePoints: 10,
+  });
+
+  // Graceful shutdown — only stop the engine on a real process exit, not on
+  // a transient stream reconnect (see the reconnect loop below).
+  process.on("SIGINT", () => {
+    console.log("\n[Stat Server] Shutting down...");
+    engine.stop();
+    process.exit(0);
   });
 
   engine.onRoundStart((payload) => {
@@ -310,6 +330,43 @@ async function main() {
       return;
     }
 
+    if (req.method === "GET" && req.url === "/leaderboard") {
+      fetchLeaderboard()
+        .then((entries) => {
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ entries }));
+        })
+        .catch((err) => {
+          console.error("[Stat Server] Leaderboard fetch failed:", err.message || err);
+          res.writeHead(500, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "Failed to fetch leaderboard" }));
+        });
+      return;
+    }
+
+    if (req.method === "GET" && req.url?.startsWith("/session-stats")) {
+      // This game mode's OWN tracking of a player's streak/points, kept
+      // separate from the combined on-chain total (which sums points from
+      // both server.ts's odds game and this stat game, since they share
+      // one PlayerScore PDA per wallet). Useful for the frontend to show
+      // "you earned X points in THIS game" alongside the all-time total.
+      const url = new URL(req.url, `http://localhost:${HTTP_PORT}`);
+      const userId = url.searchParams.get("userId");
+      if (!userId) {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "userId query param required" }));
+        return;
+      }
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(
+        JSON.stringify({
+          streak: engine.getPlayerStreak(userId),
+          sessionPoints: engine.getPlayerPoints(userId),
+        })
+      );
+      return;
+    }
+
     if (req.method === "POST" && req.url === "/call") {
       let body = "";
       req.on("data", (chunk) => (body += chunk));
@@ -353,7 +410,7 @@ async function main() {
   });
 
   // --- Connect to scores stream and pump ticks through the decoder ---
-  const { reader, jwt, apiToken } = await activateAndGetScoresStream();
+  let { reader, jwt, apiToken } = await activateAndGetScoresStream();
 
   matchInfo = await lookupMatchInfo(jwt, apiToken);
   if (matchInfo) {
@@ -368,39 +425,89 @@ async function main() {
   let decodedCount = 0;
   console.log("[Stat Server] Live. Feeding score ticks into stat engine.\n");
 
-  try {
-    while (true) {
-      const { value, done } = await reader.read();
-      if (done) break;
+  // Reconnect strategy: a stream drop (network hiccup, TxLINE-side reset,
+  // etc.) is treated as recoverable, not fatal. We first try a cheap
+  // reconnect (same jwt/apiToken, just a fresh SSE connection) with
+  // exponential backoff. If several of those in a row fail — e.g. because
+  // the token itself expired, which we have no documented lifetime for —
+  // we fall back to a full re-activation (new on-chain subscribe + new
+  // token). This two-tier approach avoids paying on-chain transaction costs
+  // on every transient network blip while still recovering from a genuinely
+  // expired session.
+  const MAX_CHEAP_RETRIES_BEFORE_FULL_REACTIVATION = 5;
+  const BASE_BACKOFF_MS = 2000;
+  const MAX_BACKOFF_MS = 30000;
+  let consecutiveFailures = 0;
 
-      const chunk = decoder.decode(value);
-      for (const line of chunk.split("\n")) {
-        if (line.startsWith("data:") || line.startsWith("Message:")) {
-          const payload = line.startsWith("data:") ? line.slice(5) : line.slice(9);
-          try {
-            const raw = JSON.parse(payload.trim()) as RawScoreTick;
-            rawTickCount++;
+  while (true) {
+    try {
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) {
+          console.warn("[Stat Server] Stream ended (server closed connection). Reconnecting...");
+          break;
+        }
 
-            const snapshot = decodeScoreTick(raw);
-            if (snapshot) {
-              decodedCount++;
-              engine.ingest(snapshot);
-            } else if (rawTickCount % 20 === 1) {
-              // Periodically surface raw ticks that failed to decode, so
-              // it's obvious in the logs if the decoder needs fixing —
-              // not spamming every single tick, just a sample.
-              console.log(`[Stat Server] undecoded raw tick (sample):`, JSON.stringify(raw));
+        consecutiveFailures = 0; // a successful read means the connection is healthy
+
+        const chunk = decoder.decode(value);
+        for (const line of chunk.split("\n")) {
+          if (line.startsWith("data:") || line.startsWith("Message:")) {
+            const payload = line.startsWith("data:") ? line.slice(5) : line.slice(9);
+            try {
+              const raw = JSON.parse(payload.trim()) as RawScoreTick;
+              rawTickCount++;
+
+              const snapshot = decodeScoreTick(raw);
+              if (snapshot) {
+                decodedCount++;
+                engine.ingest(snapshot);
+              } else if (rawTickCount % 20 === 1) {
+                console.log(`[Stat Server] undecoded raw tick (sample):`, JSON.stringify(raw));
+              }
+            } catch {
+              // ignore non-JSON keepalive lines
             }
-          } catch {
-            // ignore non-JSON keepalive lines
           }
         }
       }
+    } catch (err: any) {
+      console.error("[Stat Server] Stream read error:", err.message || err);
+    } finally {
+      try {
+        reader.releaseLock();
+      } catch {
+        // already released or in a bad state — safe to ignore
+      }
     }
-  } finally {
-    reader.releaseLock();
-    engine.stop();
-    console.log(`[Stat Server] Stream ended. Raw ticks: ${rawTickCount}, decoded: ${decodedCount}`);
+
+    consecutiveFailures++;
+    const useFullReactivation = consecutiveFailures > MAX_CHEAP_RETRIES_BEFORE_FULL_REACTIVATION;
+    const backoffMs = Math.min(BASE_BACKOFF_MS * 2 ** (consecutiveFailures - 1), MAX_BACKOFF_MS);
+
+    console.log(
+      `[Stat Server] Reconnect attempt ${consecutiveFailures} in ${backoffMs}ms` +
+        (useFullReactivation ? " (full re-activation)" : " (reusing existing session)")
+    );
+    await new Promise((resolve) => setTimeout(resolve, backoffMs));
+
+    try {
+      if (useFullReactivation) {
+        const fresh = await activateAndGetScoresStream();
+        reader = fresh.reader;
+        jwt = fresh.jwt;
+        apiToken = fresh.apiToken;
+        consecutiveFailures = 0;
+        console.log("[Stat Server] Full re-activation succeeded.");
+      } else {
+        reader = await openScoresStream(jwt, apiToken);
+        console.log("[Stat Server] Reconnected using existing session.");
+      }
+    } catch (reconnectErr: any) {
+      console.error("[Stat Server] Reconnect attempt failed:", reconnectErr.message || reconnectErr);
+      // Loop back around — the next iteration will back off further and
+      // eventually escalate to full re-activation if not already there.
+    }
   }
 }
 

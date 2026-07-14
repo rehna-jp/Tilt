@@ -144,9 +144,33 @@ export function useStatGameSocket(userId: string | null) {
     return Boolean(data.accepted);
   }
 
+  async function fetchSessionStats(): Promise<{ streak: number; sessionPoints: number } | null> {
+    if (!userId) return null;
+    try {
+      const res = await fetch(`${STAT_SERVER_URL}/session-stats?userId=${encodeURIComponent(userId)}`);
+      const data = await res.json();
+      if (typeof data.sessionPoints === "number") {
+        return { streak: data.streak, sessionPoints: data.sessionPoints };
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
   // Convenience: this player's own outcome from the last resolved round, if any.
   const myLastOutcome =
     lastResolved && userId ? lastResolved.playerOutcomes.find((o) => o.userId === userId) ?? null : null;
 
-  return { status, currentTotals, openRound, lastResolved, myLastOutcome, history, matchInfo, submitCall };
+  return {
+    status,
+    currentTotals,
+    openRound,
+    lastResolved,
+    myLastOutcome,
+    history,
+    matchInfo,
+    submitCall,
+    fetchSessionStats,
+  };
 }

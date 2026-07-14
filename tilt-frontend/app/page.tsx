@@ -5,6 +5,7 @@ import dynamic from "next/dynamic";
 import { useWallet } from "@solana/wallet-adapter-react";
 import { CrowdMeter } from "@/components/CrowdMeter";
 import { StreakBadge } from "@/components/StreakBadge";
+import { Leaderboard } from "@/components/Leaderboard";
 import { useStatGameSocket, StatCategory, HiLoCall } from "@/lib/useStatGameSocket";
 
 // WalletMultiButton renders differently on the server (no wallet extension
@@ -31,7 +32,7 @@ export default function Home() {
   const { publicKey, connected } = useWallet();
   const userId = publicKey?.toBase58() ?? null;
 
-  const { status, currentTotals, openRound, lastResolved, myLastOutcome, history, matchInfo, submitCall } =
+  const { status, currentTotals, openRound, lastResolved, myLastOutcome, history, matchInfo, submitCall, fetchSessionStats } =
     useStatGameSocket(userId);
 
   const [selectedCategory, setSelectedCategory] = useState<StatCategory>("corners");
@@ -39,6 +40,8 @@ export default function Home() {
   const [submitting, setSubmitting] = useState(false);
   const [secondsLeft, setSecondsLeft] = useState<number | null>(null);
   const [streak, setStreak] = useState(0);
+  const [sessionPoints, setSessionPoints] = useState(0);
+  const [leaderboardRefreshKey, setLeaderboardRefreshKey] = useState(0);
 
   useEffect(() => {
     setMyCall(null);
@@ -47,6 +50,25 @@ export default function Home() {
   useEffect(() => {
     if (myLastOutcome) setStreak(myLastOutcome.streakAfter);
   }, [myLastOutcome]);
+
+  // Session points are THIS game mode's own running total (not the combined
+  // on-chain total, which sums points from every game sharing this wallet's
+  // PlayerScore PDA). Refetched each time a round resolves.
+  useEffect(() => {
+    if (!lastResolved) return;
+    fetchSessionStats().then((stats) => {
+      if (stats) setSessionPoints(stats.sessionPoints);
+    });
+  }, [lastResolved, fetchSessionStats]);
+
+  // Bump the leaderboard refresh key whenever a round resolves — the
+  // on-chain write happens async on the server right after resolution, so
+  // this fetch may occasionally beat the actual write; a manual refresh a
+  // few seconds later would catch it. Good enough for now, worth revisiting
+  // if it feels laggy in practice.
+  useEffect(() => {
+    if (lastResolved) setLeaderboardRefreshKey((k) => k + 1);
+  }, [lastResolved]);
 
   useEffect(() => {
     if (!openRound) {
@@ -100,6 +122,7 @@ export default function Home() {
             {status === "open" ? "Live" : status === "connecting" ? "Connecting" : "Disconnected"}
           </span>
           <span className="spacer" />
+          {sessionPoints > 0 && <span className="session-points">{sessionPoints} pts (this game)</span>}
           <StreakBadge streak={streak} />
         </div>
 
@@ -203,6 +226,8 @@ export default function Home() {
         </div>
       </section>
 
+      <Leaderboard myUserId={userId} refreshKey={leaderboardRefreshKey} />
+
       <style jsx>{`
         .page {
           min-height: 100vh;
@@ -286,6 +311,11 @@ export default function Home() {
         }
         .spacer {
           flex: 1;
+        }
+        .session-points {
+          font-family: var(--font-mono);
+          font-size: 12px;
+          color: var(--text-dim);
         }
         .category-picker {
           display: grid;

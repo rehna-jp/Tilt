@@ -104,3 +104,47 @@ export async function updatePlayerScore(
 
   return sig;
 }
+
+export interface LeaderboardEntry {
+  owner: string; // base58 pubkey
+  bestStreak: number;
+  totalPoints: number;
+  matchesPlayed: number;
+  roundsWon: number;
+}
+
+/**
+ * Fetches ALL PlayerScore accounts for this program and returns them sorted
+ * by totalPoints descending. Uses Anchor's own account decoder (via
+ * program.account.playerScore.all()) rather than hand-parsing raw bytes —
+ * it already knows the correct discriminator and field layout from the IDL,
+ * so this can't drift out of sync with the on-chain struct the way a manual
+ * byte-offset parser could.
+ *
+ * No pagination/limit here since the program deliberately has no on-chain
+ * ranking (see anchor-program/SETUP.md) — this is exactly the off-chain
+ * indexing approach that design assumed callers would use.
+ */
+export async function fetchLeaderboard(limit = 50): Promise<LeaderboardEntry[]> {
+  const program = getLeaderboardProgram();
+
+  // Cast to `any` here because the generic Program<Idl> type (used since we
+  // don't have the real generated TiltLeaderboard type in this file — see
+  // the same caveat noted for updatePlayerScore) doesn't know the account
+  // namespace's exact shape at compile time. The runtime behavior is
+  // standard Anchor and was exercised indirectly by the passing program
+  // tests, but this specific read path hasn't been run yet — worth a
+  // careful first test.
+  const accounts = await (program.account as any).playerScore.all();
+
+  const entries: LeaderboardEntry[] = accounts.map((a: any) => ({
+    owner: a.account.owner.toBase58(),
+    bestStreak: a.account.bestStreak,
+    totalPoints: a.account.totalPoints,
+    matchesPlayed: a.account.matchesPlayed,
+    roundsWon: a.account.roundsWon,
+  }));
+
+  entries.sort((a, b) => b.totalPoints - a.totalPoints);
+  return entries.slice(0, limit);
+}
