@@ -156,29 +156,17 @@ async function main() {
 
   console.log(`[Lookup] Retrieved ${fixtures.length} fixtures.\n`);
 
-  // Filter to anything involving Norway, England, Argentina, or Switzerland
-  // (today's quarterfinals) so the output is scannable, not a wall of data.
-  const keywords = ["norway", "england", "argentina", "switzerland"];
-  const relevant = fixtures.filter((f) =>
-    keywords.some(
-      (kw) => f.Participant1?.toLowerCase().includes(kw) || f.Participant2?.toLowerCase().includes(kw)
-    )
-  );
-
-  console.log(`[Lookup] Matches involving today's quarterfinal teams:\n`);
-  for (const f of relevant) {
+  // Print all fixtures — earlier we filtered to a hardcoded list of
+  // quarterfinal teams, but that list goes stale as the tournament
+  // progresses (semifinals, final) and risks silently hiding whatever's
+  // actually live right now. Better to just show everything.
+  console.log(`[Lookup] All fixtures:\n`);
+  for (const f of fixtures) {
     console.log(`  ${f.Participant1} vs ${f.Participant2}`);
     console.log(`    FixtureId: ${f.FixtureId}`);
     console.log(`    StartTime: ${new Date(f.StartTime).toString()}`);
     console.log(`    Competition: ${f.Competition ?? "n/a"}`);
     console.log("");
-  }
-
-  if (relevant.length === 0) {
-    console.log("  (none found — printing first 10 fixtures instead so you can see the real shape)\n");
-    for (const f of fixtures.slice(0, 10)) {
-      console.log(`  ${f.Participant1} vs ${f.Participant2} — FixtureId: ${f.FixtureId}`);
-    }
   }
 }
 
