@@ -8,11 +8,19 @@
  * scoreTickDecoder.ts is verified against real live match data (Norway vs
  * England, 2026-07-11) — see that file for details.
  *
- * On startup, this also fetches the fixture's real team names via
- * /api/fixtures/snapshot and broadcasts them as a "match_info" SSE event,
- * so the frontend can show "Norway vs England" instead of a bare fixture ID.
+ * On startup, this auto-detects which fixture to track (the match whose
+ * kickoff time is closest to, and in the past relative to, right now — see
+ * resolveFixture() below) and fetches its real team names via
+ * /api/fixtures/snapshot, broadcasting them as a "match_info" SSE event.
+ * No manual fixture ID needed for the common case of "whatever's live
+ * right now."
  *
- * Run with:
+ * Run with (fixture auto-detected):
+ *   ANCHOR_PROVIDER_URL="https://api.devnet.solana.com" \
+ *   ANCHOR_WALLET="./wallet.json" \
+ *   npx ts-node statServer.ts
+ *
+ * Or to force a specific fixture (e.g. multiple matches live at once):
  *   ANCHOR_PROVIDER_URL="https://api.devnet.solana.com" \
  *   ANCHOR_WALLET="./wallet.json" \
  *   FIXTURE_ID=18213979 \
@@ -68,7 +76,12 @@ const DURATION_WEEKS = 4;
 const SELECTED_LEAGUES: number[] = [];
 
 // ---- Game config ----
-const FIXTURE_ID = Number(process.env.FIXTURE_ID || "18213979"); // Norway vs England (confirmed real)
+// If FIXTURE_ID is set, it's used as-is (manual override — useful if
+// multiple matches are live simultaneously and you want a specific one).
+// If not set, the server auto-detects the currently live match by finding
+// the fixture whose kickoff time is closest to (and in the past relative
+// to) right now. See detectLiveFixtureId() below.
+const MANUAL_FIXTURE_ID = process.env.FIXTURE_ID ? Number(process.env.FIXTURE_ID) : null;
 const ROUND_DURATION_MS = Number(process.env.ROUND_DURATION_MS || "90000");
 const HTTP_PORT = Number(process.env.PORT || "8788"); // different port from server.ts, so both can run side by side
 
@@ -213,41 +226,99 @@ interface MatchInfo {
   competition?: string;
 }
 
+interface FixtureResolution {
+  fixtureId: number;
+  matchInfo: MatchInfo | null;
+}
+
 /**
- * Looks up real team names for FIXTURE_ID via /api/fixtures/snapshot —
- * same endpoint verified in lookup_fixtures.ts. Returns null (not thrown)
- * on failure so a lookup hiccup doesn't take down the whole server; the
- * frontend just falls back to showing the bare fixture ID in that case.
+ * Determines which fixture to track, and looks up its team names, in one
+ * fetch of /api/fixtures/snapshot (endpoint verified in lookup_fixtures.ts).
+ *
+ * If manualFixtureId is provided (via the FIXTURE_ID env var), it's used
+ * as-is — useful when multiple matches are live at once and you want a
+ * specific one.
+ *
+ * Otherwise, auto-detects "the currently live match" using a heuristic:
+ * the fixture whose StartTime is in the past and closest to now (i.e. the
+ * most recently kicked-off match). We don't have a reliable "is this match
+ * still in progress" flag — see scoreTickDecoder.ts's notes on GameState
+ * being inconsistent with actual match state — so this is a best-effort
+ * heuristic, not a guarantee. If no fixture has already started, falls
+ * back to whichever upcoming fixture kicks off soonest.
+ *
+ * Throws only if the fixtures list is completely empty — a genuinely
+ * unrecoverable situation the caller should surface, not swallow.
  */
-async function lookupMatchInfo(jwt: string, apiToken: string): Promise<MatchInfo | null> {
-  try {
-    const response = await axios.get(`${apiBaseUrl}/fixtures/snapshot`, {
-      headers: { Authorization: `Bearer ${jwt}`, "X-Api-Token": apiToken },
-    });
-    const fixtures: any[] = response.data;
-    const match = fixtures.find((f) => f.FixtureId === FIXTURE_ID);
-    if (!match) {
-      console.warn(`[Stat Server] Fixture ${FIXTURE_ID} not found in snapshot — match name unavailable.`);
-      return null;
-    }
-    return {
-      homeTeam: match.Participant1IsHome ? match.Participant1 : match.Participant2,
-      awayTeam: match.Participant1IsHome ? match.Participant2 : match.Participant1,
-      startTime: match.StartTime,
-      competition: match.Competition,
-    };
-  } catch (err: any) {
-    console.warn("[Stat Server] Fixture lookup failed (non-fatal):", err.message || err);
-    return null;
+async function resolveFixture(jwt: string, apiToken: string, manualFixtureId: number | null): Promise<FixtureResolution> {
+  const response = await axios.get(`${apiBaseUrl}/fixtures/snapshot`, {
+    headers: { Authorization: `Bearer ${jwt}`, "X-Api-Token": apiToken },
+  });
+  const fixtures: any[] = response.data;
+
+  if (!fixtures || fixtures.length === 0) {
+    throw new Error("Fixtures snapshot returned no matches at all — cannot determine what to track.");
   }
+
+  function toMatchInfo(f: any): MatchInfo {
+    return {
+      homeTeam: f.Participant1IsHome ? f.Participant1 : f.Participant2,
+      awayTeam: f.Participant1IsHome ? f.Participant2 : f.Participant1,
+      startTime: f.StartTime,
+      competition: f.Competition,
+    };
+  }
+
+  if (manualFixtureId !== null) {
+    const match = fixtures.find((f) => f.FixtureId === manualFixtureId);
+    if (!match) {
+      console.warn(`[Stat Server] Manually specified fixture ${manualFixtureId} not found in snapshot — proceeding without match name.`);
+      return { fixtureId: manualFixtureId, matchInfo: null };
+    }
+    return { fixtureId: manualFixtureId, matchInfo: toMatchInfo(match) };
+  }
+
+  const now = Date.now();
+  const alreadyStarted = fixtures
+    .filter((f) => typeof f.StartTime === "number" && f.StartTime <= now)
+    .sort((a, b) => b.StartTime - a.StartTime); // most recently started first
+
+  if (alreadyStarted.length > 0) {
+    const best = alreadyStarted[0];
+    console.log(
+      `[Stat Server] Auto-detected live fixture: ${best.Participant1} vs ${best.Participant2} (kicked off ${new Date(best.StartTime).toISOString()})`
+    );
+    return { fixtureId: best.FixtureId, matchInfo: toMatchInfo(best) };
+  }
+
+  // Nothing has kicked off yet — fall back to whichever match starts soonest,
+  // so the server at least has something sensible to track and display.
+  const upcoming = [...fixtures].sort((a, b) => (a.StartTime ?? Infinity) - (b.StartTime ?? Infinity));
+  const soonest = upcoming[0];
+  console.warn(
+    `[Stat Server] No fixture has started yet — defaulting to the soonest upcoming match: ` +
+      `${soonest.Participant1} vs ${soonest.Participant2} (kicks off ${new Date(soonest.StartTime).toISOString()}). ` +
+      `No live data will flow until then.`
+  );
+  return { fixtureId: soonest.FixtureId, matchInfo: toMatchInfo(soonest) };
 }
 
 // ---- Main ----
 async function main() {
-  let matchInfo: MatchInfo | null = null;
+  // --- Connect and determine which fixture to track (auto or manual) ---
+  let { reader, jwt, apiToken } = await activateAndGetScoresStream();
+
+  const { fixtureId, matchInfo: initialMatchInfo } = await resolveFixture(jwt, apiToken, MANUAL_FIXTURE_ID);
+  let matchInfo: MatchInfo | null = initialMatchInfo;
+
+  if (matchInfo) {
+    console.log(`[Stat Server] Match: ${matchInfo.homeTeam} vs ${matchInfo.awayTeam}`);
+  } else {
+    console.log(`[Stat Server] Tracking fixture ${fixtureId} — match name unavailable.`);
+  }
 
   const engine = new StatRoundEngine({
-    fixtureId: FIXTURE_ID,
+    fixtureId,
     roundDurationMs: ROUND_DURATION_MS,
     basePoints: 10,
   });
@@ -307,7 +378,7 @@ async function main() {
       }
       // Send match info separately too, in case a round hasn't opened yet
       // (currentTotals may be null early on, but match info is available
-      // as soon as the fixtures lookup completes at startup).
+      // as soon as fixture resolution completes at startup).
       if (matchInfo) {
         res.write(`event: match_info\ndata: ${JSON.stringify(matchInfo)}\n\n`);
       }
@@ -325,6 +396,8 @@ async function main() {
         JSON.stringify({
           currentTotals: engine.getCurrentTotals(),
           openRound: engine.getOpenRound(),
+          matchInfo,
+          fixtureId,
         })
       );
       return;
@@ -406,18 +479,11 @@ async function main() {
     console.log(`[Stat Server] HTTP server listening on :${HTTP_PORT}`);
     console.log(`[Stat Server] SSE endpoint:  http://localhost:${HTTP_PORT}/events`);
     console.log(`[Stat Server] Call endpoint: POST http://localhost:${HTTP_PORT}/call`);
-    console.log(`[Stat Server] Tracking fixture ${FIXTURE_ID} (goals/cards/corners)`);
+    console.log(`[Stat Server] Tracking fixture ${fixtureId} (goals/cards/corners)`);
   });
 
-  // --- Connect to scores stream and pump ticks through the decoder ---
-  let { reader, jwt, apiToken } = await activateAndGetScoresStream();
-
-  matchInfo = await lookupMatchInfo(jwt, apiToken);
   if (matchInfo) {
-    console.log(`[Stat Server] Match: ${matchInfo.homeTeam} vs ${matchInfo.awayTeam}`);
     broadcast("match_info", matchInfo);
-  } else {
-    console.log(`[Stat Server] Match name unavailable — frontend will show fixture ID ${FIXTURE_ID} instead.`);
   }
 
   const decoder = new TextDecoder();
