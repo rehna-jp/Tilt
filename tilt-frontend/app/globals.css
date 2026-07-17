@@ -1,52 +1,169 @@
-@import url("https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@600;700;800&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@500;600&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@700;800;900&family=Outfit:wght@400;500;600;700&family=Space+Mono:ital,wght@0,400;0,700;1,400&display=swap");
 
+/* ─── Design Tokens ─────────────────────────────────────────────── */
 :root {
-  --bg: #0a0e12;
-  --bg-elevated: #12181f;
-  --bg-elevated-2: #171e26;
-  --border: #232b34;
-  --text: #ecedee;
-  --text-dim: #8a94a0;
-  --up: #35d07f;
-  --down: #ff5c5c;
-  --line: #f2c744;
+  /* Backgrounds */
+  --bg:           #060810;
+  --bg-1:         #0c1118;
+  --bg-2:         #111820;
+  --bg-3:         #19232e;
+  --bg-glass:     rgba(11, 15, 22, 0.72);
 
+  /* Borders */
+  --border:       #1c2635;
+  --border-hi:    #2c3f56;
+  --glass-border: rgba(255, 255, 255, 0.06);
+
+  /* Text */
+  --text:         #dde2ea;
+  --text-dim:     #6b7a8d;
+  --text-faint:   #323e4d;
+
+  /* Brand — Up / Down / Line */
+  --up:           #35d07f;
+  --up-muted:     rgba(53, 208, 127, 0.14);
+  --up-glow:      rgba(53, 208, 127, 0.35);
+  --down:         #ff5c5c;
+  --down-muted:   rgba(255, 92, 92, 0.12);
+  --down-glow:    rgba(255, 92, 92, 0.30);
+  --line:         #f2c744;
+  --line-muted:   rgba(242, 199, 68, 0.12);
+  --line-glow:    rgba(242, 199, 68, 0.30);
+
+  /* Gradients */
+  --grad-up:    linear-gradient(135deg, #1a4d37 0%, #1f5c40 100%);
+  --grad-down:  linear-gradient(135deg, #4d1a1a 0%, #5c2020 100%);
+  --grad-brand: linear-gradient(135deg, #f2c744 0%, #e8a918 100%);
+  --grad-bg:    radial-gradient(ellipse 80% 50% at 50% -10%, rgba(53,208,127,0.06) 0%, transparent 70%),
+                radial-gradient(ellipse 60% 40% at 85% 80%,  rgba(242,199,68,0.04) 0%, transparent 60%);
+
+  /* Typography */
   --font-display: "Big Shoulders Display", sans-serif;
-  --font-body: "Inter", sans-serif;
-  --font-mono: "IBM Plex Mono", monospace;
+  --font-body:    "Outfit", sans-serif;
+  --font-mono:    "Space Mono", monospace;
+
+  /* Elevation / Shadow */
+  --shadow-sm:   0 2px 8px  rgba(0,0,0,0.40);
+  --shadow-md:   0 4px 24px rgba(0,0,0,0.55);
+  --shadow-lg:   0 8px 48px rgba(0,0,0,0.70);
+
+  /* Radii */
+  --r-sm:  8px;
+  --r-md:  14px;
+  --r-lg:  20px;
+  --r-xl:  28px;
+  --r-pill: 9999px;
+
+  /* Transitions */
+  --t-fast: 100ms ease;
+  --t-mid:  220ms cubic-bezier(.4,0,.2,1);
+  --t-slow: 400ms cubic-bezier(.4,0,.2,1);
 }
 
-* {
+/* ─── Reset ─────────────────────────────────────────────────────── */
+*,
+*::before,
+*::after {
   box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  scroll-behavior: smooth;
 }
 
 html,
 body {
-  padding: 0;
-  margin: 0;
+  min-height: 100%;
   background: var(--bg);
+  background-image: var(--grad-bg);
+  background-attachment: fixed;
   color: var(--text);
   font-family: var(--font-body);
+  font-size: 15px;
+  line-height: 1.5;
 }
 
-a {
-  color: inherit;
-}
+a { color: inherit; text-decoration: none; }
 
-button {
-  font-family: inherit;
-}
+button { font-family: inherit; cursor: pointer; }
 
-/* Visible keyboard focus everywhere, per accessibility floor */
+img, svg { display: block; }
+
+/* ─── Scrollbar ──────────────────────────────────────────────────── */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: var(--border-hi);
+  border-radius: var(--r-pill);
+}
+::-webkit-scrollbar-thumb:hover { background: var(--text-faint); }
+
+/* ─── Focus ──────────────────────────────────────────────────────── */
 :focus-visible {
   outline: 2px solid var(--line);
-  outline-offset: 2px;
+  outline-offset: 3px;
+  border-radius: 4px;
 }
 
+/* ─── Keyframes ──────────────────────────────────────────────────── */
+@keyframes pulse-dot {
+  0%, 100% { box-shadow: 0 0 0 0   rgba(53,208,127,0.6); }
+  50%       { box-shadow: 0 0 0 6px rgba(53,208,127,0); }
+}
+@keyframes pulse-dot-warn {
+  0%, 100% { box-shadow: 0 0 0 0   rgba(242,199,68,0.6); }
+  50%       { box-shadow: 0 0 0 6px rgba(242,199,68,0); }
+}
+@keyframes slide-up {
+  from { opacity: 0; transform: translateY(12px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+@keyframes count-flash {
+  0%   { color: var(--line); }
+  50%  { color: #fff; }
+  100% { color: var(--line); }
+}
+@keyframes glow-pulse {
+  0%, 100% { opacity: 0.6; }
+  50%       { opacity: 1; }
+}
+@keyframes shimmer {
+  0%   { background-position: -400px 0; }
+  100% { background-position:  400px 0; }
+}
+@keyframes ring-spin {
+  from { transform: rotate(-90deg); }
+}
+@keyframes badge-pop {
+  0%   { transform: scale(0.8); opacity: 0; }
+  60%  { transform: scale(1.08); }
+  100% { transform: scale(1);   opacity: 1; }
+}
+@keyframes result-in {
+  from { opacity: 0; transform: scale(0.96) translateY(8px); }
+  to   { opacity: 1; transform: scale(1)    translateY(0);   }
+}
+
+/* ─── Utility ────────────────────────────────────────────────────── */
+.sr-only {
+  position: absolute;
+  width: 1px; height: 1px;
+  padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0,0,0,0);
+  white-space: nowrap; border: 0;
+}
+
+/* ─── Reduced motion ─────────────────────────────────────────────── */
 @media (prefers-reduced-motion: reduce) {
-  *,
-  *::before,
-  *::after {
+  *, *::before, *::after {
     animation-duration: 0.001ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.001ms !important;

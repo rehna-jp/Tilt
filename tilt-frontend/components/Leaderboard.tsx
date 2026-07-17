@@ -10,12 +10,15 @@ interface LeaderboardEntry {
   roundsWon: number;
 }
 
-const STAT_SERVER_URL = process.env.NEXT_PUBLIC_STAT_SERVER_URL || "http://localhost:8788";
+const STAT_SERVER_URL =
+  process.env.NEXT_PUBLIC_STAT_SERVER_URL || "http://localhost:8788";
 
 function shortenPubkey(pubkey: string): string {
   if (pubkey.length <= 10) return pubkey;
   return `${pubkey.slice(0, 4)}..${pubkey.slice(-4)}`;
 }
+
+const RANK_MEDALS: Record<number, string> = { 0: "🥇", 1: "🥈", 2: "🥉" };
 
 interface LeaderboardProps {
   myUserId: string | null;
@@ -23,12 +26,25 @@ interface LeaderboardProps {
   refreshKey: number;
 }
 
+function SkeletonRow() {
+  return (
+    <div className="lb-skeleton">
+      <span className="skel skel-rank" />
+      <span className="skel skel-owner" />
+      <span className="skel skel-streak" />
+      <span className="skel skel-pts" />
+    </div>
+  );
+}
+
 export function Leaderboard({ myUserId, refreshKey }: LeaderboardProps) {
-  const [entries, setEntries] = useState<LeaderboardEntry[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [entries, setEntries]   = useState<LeaderboardEntry[] | null>(null);
+  const [error, setError]       = useState<string | null>(null);
+  const [showAll, setShowAll]   = useState(false);
 
   useEffect(() => {
     let cancelled = false;
+    setEntries(null); // triggers skeleton on each refresh
 
     fetch(`${STAT_SERVER_URL}/leaderboard`)
       .then((res) => res.json())
@@ -46,91 +62,228 @@ export function Leaderboard({ myUserId, refreshKey }: LeaderboardProps) {
         if (!cancelled) setError("Could not reach leaderboard");
       });
 
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   }, [refreshKey]);
+
+  const visible = entries
+    ? showAll
+      ? entries
+      : entries.slice(0, 5)
+    : null;
 
   return (
     <section className="leaderboard">
-      <h2>On-chain Leaderboard</h2>
-      <p className="lb-subtitle">All-time total, combined across every Tilt game mode</p>
+      <div className="lb-header">
+        <h2 className="section-title">Leaderboard</h2>
+        <span className="lb-subtitle">All-time · on-chain</span>
+      </div>
 
       {error && <div className="lb-hint">{error}</div>}
-      {!error && entries === null && <div className="lb-hint">Loading…</div>}
-      {!error && entries && entries.length === 0 && (
-        <div className="lb-hint">No players on the leaderboard yet — be the first to win a round.</div>
+
+      {/* Skeleton loading */}
+      {!error && entries === null && (
+        <div className="lb-list">
+          {[0, 1, 2, 3].map((i) => <SkeletonRow key={i} />)}
+        </div>
       )}
 
-      {entries && entries.length > 0 && (
-        <div className="lb-list">
-          {entries.map((e, i) => (
-            <div key={e.owner} className={`lb-row ${e.owner === myUserId ? "me" : ""}`}>
-              <span className="lb-rank">#{i + 1}</span>
-              <span className="lb-owner">{shortenPubkey(e.owner)}</span>
-              <span className="lb-streak">🔥{e.bestStreak}</span>
-              <span className="lb-points">{e.totalPoints} pts</span>
-            </div>
-          ))}
+      {/* Empty state */}
+      {!error && entries && entries.length === 0 && (
+        <div className="lb-empty">
+          <span className="lb-empty-icon" aria-hidden="true">🏆</span>
+          <span>No players yet — be the first to win a round.</span>
         </div>
+      )}
+
+      {/* Entries */}
+      {visible && visible.length > 0 && (
+        <>
+          <div className="lb-list">
+            {visible.map((e, i) => {
+              const isMe    = e.owner === myUserId;
+              const medal   = RANK_MEDALS[i];
+              return (
+                <div key={e.owner} className={`lb-row${isMe ? " me" : ""}${i === 0 ? " first" : ""}`}>
+                  <span className="lb-rank">
+                    {medal ?? `#${i + 1}`}
+                  </span>
+                  <span className="lb-owner" title={e.owner}>
+                    {isMe ? "You" : shortenPubkey(e.owner)}
+                  </span>
+                  <span className="lb-streak" title={`Best streak: ${e.bestStreak}`}>
+                    🔥{e.bestStreak}
+                  </span>
+                  <span className="lb-points">{e.totalPoints} pts</span>
+                </div>
+              );
+            })}
+          </div>
+
+          {entries && entries.length > 5 && (
+            <button
+              className="lb-show-more"
+              onClick={() => setShowAll((v) => !v)}
+            >
+              {showAll ? "Show less ▲" : `Show all ${entries.length} ▼`}
+            </button>
+          )}
+        </>
       )}
 
       <style jsx>{`
         .leaderboard {
-          margin-top: 8px;
+          background: var(--bg-1);
+          border: 1px solid var(--border);
+          border-radius: var(--r-xl);
+          padding: 22px 20px;
+          display: flex;
+          flex-direction: column;
+          gap: 14px;
         }
-        .leaderboard h2 {
+        .lb-header {
+          display: flex;
+          align-items: baseline;
+          justify-content: space-between;
+          gap: 12px;
+        }
+        .section-title {
           font-family: var(--font-display);
-          font-size: 20px;
-          font-weight: 700;
-          margin: 0 0 4px;
-          color: var(--text-dim);
+          font-size: 16px;
+          font-weight: 800;
+          letter-spacing: 0.06em;
           text-transform: uppercase;
-          letter-spacing: 0.05em;
+          color: var(--text-dim);
         }
         .lb-subtitle {
-          font-size: 12px;
-          color: var(--text-dim);
-          margin: 0 0 12px;
+          font-size: 11px;
+          color: var(--text-faint);
+          font-family: var(--font-mono);
+          text-transform: uppercase;
+          letter-spacing: 0.05em;
+          background: var(--bg-3);
+          border: 1px solid var(--border);
+          border-radius: var(--r-pill);
+          padding: 2px 8px;
         }
         .lb-hint {
           font-size: 13px;
           color: var(--text-dim);
+          font-family: var(--font-mono);
         }
+        .lb-empty {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          font-size: 13px;
+          color: var(--text-dim);
+          padding: 8px 0;
+        }
+        .lb-empty-icon { font-size: 18px; }
         .lb-list {
           display: flex;
           flex-direction: column;
-          gap: 6px;
+          gap: 5px;
         }
-        .lb-row {
+
+        /* Skeleton */
+        .lb-skeleton {
           display: grid;
           grid-template-columns: 32px 1fr auto auto;
           align-items: center;
           gap: 12px;
+          padding: 11px 12px;
+          border-radius: var(--r-sm);
+          background: var(--bg-2);
+          border: 1px solid var(--border);
+        }
+        .skel {
+          display: block;
+          border-radius: var(--r-pill);
+          background: linear-gradient(
+            90deg,
+            var(--bg-3) 0%,
+            var(--border-hi) 50%,
+            var(--bg-3) 100%
+          );
+          background-size: 400px 100%;
+          animation: shimmer 1.4s ease-in-out infinite;
+          height: 12px;
+        }
+        .skel-rank  { width: 20px; }
+        .skel-owner { width: 80px; }
+        .skel-streak{ width: 36px; }
+        .skel-pts   { width: 48px; }
+
+        /* Rows */
+        .lb-row {
+          display: grid;
+          grid-template-columns: 36px 1fr auto auto;
+          align-items: center;
+          gap: 12px;
           padding: 10px 12px;
-          border-radius: 8px;
-          background: var(--bg-elevated);
+          border-radius: var(--r-sm);
+          background: var(--bg-2);
           border: 1px solid var(--border);
           font-family: var(--font-mono);
           font-size: 13px;
+          transition: border-color var(--t-mid), background var(--t-mid);
+          animation: slide-up 280ms ease;
+        }
+        .lb-row:hover { border-color: var(--border-hi); }
+        .lb-row.first {
+          border-color: rgba(242,199,68,0.35);
+          background: var(--line-muted);
+          box-shadow: 0 0 16px rgba(242,199,68,0.06);
         }
         .lb-row.me {
           border-color: var(--line);
-          background: rgba(242, 199, 68, 0.06);
+          background: var(--line-muted);
+          box-shadow: inset 3px 0 0 var(--line);
         }
         .lb-rank {
+          font-size: 16px;
+          line-height: 1;
           color: var(--text-dim);
         }
         .lb-owner {
           color: var(--text);
+          font-size: 12px;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+        .lb-row.me .lb-owner {
+          color: var(--line);
+          font-weight: 700;
         }
         .lb-streak {
           color: var(--up);
           font-size: 12px;
+          white-space: nowrap;
         }
         .lb-points {
           font-weight: 700;
           color: var(--line);
+          white-space: nowrap;
+          font-size: 13px;
+        }
+        .lb-show-more {
+          width: 100%;
+          padding: 8px;
+          border-radius: var(--r-sm);
+          border: 1px solid var(--border);
+          background: var(--bg-2);
+          color: var(--text-dim);
+          font-size: 12px;
+          font-family: var(--font-mono);
+          cursor: pointer;
+          text-transform: uppercase;
+          letter-spacing: 0.05em;
+          transition: border-color var(--t-mid), color var(--t-mid);
+        }
+        .lb-show-more:hover {
+          border-color: var(--border-hi);
+          color: var(--text);
         }
       `}</style>
     </section>

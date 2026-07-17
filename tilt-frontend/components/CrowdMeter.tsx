@@ -5,20 +5,31 @@ interface CrowdMeterProps {
   totalCalls: number;
 }
 
-/** A horizontal split bar showing what % of players called Higher vs Lower. */
+/** Animated split bar showing % of players who called Higher vs Lower. */
 export function CrowdMeter({ higherPct, totalCalls }: CrowdMeterProps) {
   const lowerPct = 100 - higherPct;
 
   return (
     <div className="crowd-meter">
-      <div className="crowd-meter-label">
-        {totalCalls} {totalCalls === 1 ? "player" : "players"} called this round
+      <div className="crowd-header">
+        <span className="crowd-label">Crowd sentiment</span>
+        <span className="crowd-count">
+          {totalCalls} {totalCalls === 1 ? "player" : "players"}
+        </span>
       </div>
-      <div className="crowd-meter-bar">
-        <div className="crowd-meter-higher" style={{ width: `${higherPct}%` }} />
-        <div className="crowd-meter-lower" style={{ width: `${lowerPct}%` }} />
+
+      <div className="crowd-bar" role="img" aria-label={`${higherPct}% called higher, ${lowerPct}% called lower`}>
+        <div
+          className="bar-higher"
+          style={{ width: `${higherPct}%` }}
+        />
+        <div
+          className="bar-lower"
+          style={{ width: `${lowerPct}%` }}
+        />
       </div>
-      <div className="crowd-meter-pcts">
+
+      <div className="crowd-pcts">
         <span className="pct-higher">▲ {higherPct}%</span>
         <span className="pct-lower">{lowerPct}% ▼</span>
       </div>
@@ -27,42 +38,61 @@ export function CrowdMeter({ higherPct, totalCalls }: CrowdMeterProps) {
         .crowd-meter {
           width: 100%;
           font-family: var(--font-mono);
+          display: flex;
+          flex-direction: column;
+          gap: 6px;
         }
-        .crowd-meter-label {
+        .crowd-header {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+        }
+        .crowd-label {
           font-size: 11px;
           color: var(--text-dim);
-          margin-bottom: 6px;
           text-transform: uppercase;
-          letter-spacing: 0.04em;
+          letter-spacing: 0.05em;
+          font-family: var(--font-body);
         }
-        .crowd-meter-bar {
+        .crowd-count {
+          font-size: 11px;
+          color: var(--text-faint);
+          background: var(--bg-3);
+          border: 1px solid var(--border);
+          border-radius: var(--r-pill);
+          padding: 2px 8px;
+        }
+        .crowd-bar {
           display: flex;
           width: 100%;
-          height: 10px;
-          border-radius: 6px;
+          height: 8px;
+          border-radius: var(--r-pill);
           overflow: hidden;
           background: var(--border);
+          gap: 1px;
         }
-        .crowd-meter-higher {
+        .bar-higher {
           background: var(--up);
-          transition: width 300ms ease;
+          min-width: 0;
+          transition: width 600ms cubic-bezier(.4,0,.2,1);
+          border-radius: var(--r-pill) 0 0 var(--r-pill);
+          box-shadow: 0 0 8px var(--up-glow);
         }
-        .crowd-meter-lower {
+        .bar-lower {
           background: var(--down);
-          transition: width 300ms ease;
+          min-width: 0;
+          transition: width 600ms cubic-bezier(.4,0,.2,1);
+          border-radius: 0 var(--r-pill) var(--r-pill) 0;
+          box-shadow: 0 0 8px var(--down-glow);
         }
-        .crowd-meter-pcts {
+        .crowd-pcts {
           display: flex;
           justify-content: space-between;
           font-size: 12px;
-          margin-top: 4px;
+          font-weight: 700;
         }
-        .pct-higher {
-          color: var(--up);
-        }
-        .pct-lower {
-          color: var(--down);
-        }
+        .pct-higher { color: var(--up); }
+        .pct-lower  { color: var(--down); }
       `}</style>
     </div>
   );
